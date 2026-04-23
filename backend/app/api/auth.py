@@ -37,6 +37,7 @@ async def connect_gmail(db: AsyncSession = Depends(get_db)):
 @router.get("/callback")
 async def oauth_callback(
     code: str = Query(...),
+    state: str = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Handle the OAuth callback from Google.
@@ -46,7 +47,7 @@ async def oauth_callback(
     """
     auth = AuthService(db)
     try:
-        result = await auth.exchange_code(code)
+        result = await auth.exchange_code(code, state=state)
         # Redirect to frontend with success
         from app.config import get_settings
 

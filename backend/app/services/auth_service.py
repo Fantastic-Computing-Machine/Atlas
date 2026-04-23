@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
+
+# Allow Google to return additional scopes (userinfo, openid) beyond
+# what we requested without oauthlib raising a scope-change error.
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from cryptography.fernet import Fernet
 from google.auth.transport.requests import Request as GoogleRequest
@@ -27,6 +32,10 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# In-memory store for OAuth state (code_verifier for PKCE).
+# Suitable for single-instance / local-first deployment.
+_oauth_state_store: dict[str, str] = {}
 
 
 class AuthService:
@@ -59,20 +68,28 @@ class AuthService:
     def get_authorization_url(self) -> str:
         """Generate the Google OAuth consent URL."""
         flow = self.build_flow()
-        auth_url, _ = flow.authorization_url(
+        auth_url, state = flow.authorization_url(
             access_type="offline",
             include_granted_scopes="true",
             prompt="consent",
         )
+        # Store the code_verifier (PKCE) keyed by state so we can
+        # restore it when the callback arrives.
+        if hasattr(flow, "code_verifier") and flow.code_verifier:
+            _oauth_state_store[state] = flow.code_verifier
         return auth_url
 
-    async def exchange_code(self, code: str) -> dict[str, Any]:
+    async def exchange_code(self, code: str, state: str | None = None) -> dict[str, Any]:
         """Exchange authorization code for credentials and persist user.
 
         Returns:
             Dict with user info and connection status.
         """
         flow = self.build_flow()
+        # Restore the PKCE code_verifier from the state stored during
+        # authorization, so the token exchange includes it.
+        if state and state in _oauth_state_store:
+            flow.code_verifier = _oauth_state_store.pop(state)
         flow.fetch_token(code=code)
         credentials = flow.credentials
 
